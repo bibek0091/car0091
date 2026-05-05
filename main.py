@@ -253,12 +253,6 @@ class BFMC_App:
         self.priority_timer = 0.0
         self.bus_lane_active = False
 
-        # Localization App Setup
-        self.pose_queue = queue.Queue(maxsize=1)
-        self.localizer_engine = RealtimeLocalizer(self.pose_queue, self.imu, self.camera, self.handler)
-        self.loc_thread = threading.Thread(target=self.localizer_engine.run, daemon=True)
-        self.loc_thread.start()
-
         # Routing State
         self.mode = "DRIVE"
         self.start_node = None; self.end_node = None; self.pass_nodes = []
@@ -286,6 +280,12 @@ class BFMC_App:
         self.camera = Camera(sim_video=None)
         self.detector = LaneDetector() if _AUTO_DRIVE_AVAILABLE else None
         self.controller = Controller() if _AUTO_DRIVE_AVAILABLE else None
+
+        # Localization App Setup
+        self.pose_queue = queue.Queue(maxsize=1)
+        self.localizer_engine = RealtimeLocalizer(self.pose_queue, self.imu, self.camera, self.handler)
+        self.loc_thread = threading.Thread(target=self.localizer_engine.run, daemon=True)
+        self.loc_thread.start()
 
         self.traffic_engine, self.behavior, self.yolo = None, None, None
         if _AI_AVAILABLE:
