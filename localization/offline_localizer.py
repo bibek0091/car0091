@@ -8,7 +8,6 @@ import pathlib
 import json
 import csv
 from localization.graph_utils import load_graph, compute_edge_curvatures
-from localization.motion_model import pwm_to_delta
 from localization.particle_filter import (
     init_particles_uniform, predict, update_weights, effective_n, resample, map_estimate
 )
@@ -31,7 +30,7 @@ def run_offline(recording_dir, output_path):
     merged = pd.concat([imu_df, rc_df]).sort_values('t')
     
     prev_t = merged['t'].iloc[0]
-    last_rc = {'steering_pwm': 1500, 'throttle_pwm': 1500}
+    last_rc = {'steering_deg': 0.0, 'speed_mms': 0.0}
 
     print("Running offline particle filter...")
 
@@ -40,17 +39,18 @@ def run_offline(recording_dir, output_path):
         prev_t = row['t']
         
         if row['type'] == 'rc':
-            last_rc['steering_pwm'] = row['steering_pwm']
-            last_rc['throttle_pwm'] = row['throttle_pwm']
+            last_rc['steering_deg'] = row['steering_deg']
+            last_rc['speed_mms'] = row['speed_mms']
             continue
             
         if row['type'] == 'imu':
             psi_imu = float(row['yaw'])
             
-            delta = pwm_to_delta(last_rc['steering_pwm'])
-            throttle_pwm = last_rc['throttle_pwm']
+            import math
+            delta = math.radians(last_rc['steering_deg'])
+            speed_mms = last_rc['speed_mms']
             
-            v_est = 0.3 if throttle_pwm > 1560 else 0.0
+            v_est = 0.3 if speed_mms > 200 else 0.0
 
             predict(particles, v_est, delta, dt, G, psi_imu)
             update_weights(particles, psi_imu, None, None, G, {}, delta)

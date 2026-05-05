@@ -533,6 +533,19 @@ class BFMC_App:
         behav_out = None
         active_sign_cmd = None
 
+        if frame is not None:
+            # MAP BUILD RECORDING
+            if getattr(self, 'is_recording_map', False):
+                t = time.time() - self.record_start_time
+                if not hasattr(self, 'frame_idx'): self.frame_idx = 0
+                if self.frame_idx % 3 == 0:
+                    import cv2
+                    cv2.imwrite(str(self.map_record_dir / 'frames' / f'frame_{self.frame_idx//3:06d}.jpg'), frame)
+                
+                self.imu_rows.append([t, self.imu.get_yaw(), getattr(self.imu, 'pitch', 0.0), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+                self.rc_rows.append([t, self.current_steer, self.current_speed])
+                self.frame_idx += 1
+
         if frame is not None and self.detector and self.controller:
             # 2. Process Lane Detection
             yaw_deg = self.imu.get_yaw()
@@ -1013,6 +1026,61 @@ class BFMC_App:
 
         # Non-blocking reschedule — works for BOTH headless and GUI modes
         self.root.after(50, self.control_loop)
+
+    # ========================================================
+    # LOCALIZATION MAPPING PIELINE
+    # ========================================================
+    def toggle_map_recording(self):
+        self.is_recording_map = getattr(self, 'is_recording_map', False)
+        
+        if not self.is_recording_map:
+            import shutil, pathlib
+            self.map_record_dir = pathlib.Path("recordings/gui_run")
+            if self.map_record_dir.exists():
+                shutil.rmtree(self.map_record_dir, ignore_errors=True)
+            self.map_record_dir.mkdir(parents=True, exist_ok=True)
+            (self.map_record_dir / 'frames').mkdir(exist_ok=True)
+            
+            self.record_start_time = time.time()
+            self.imu_rows = []
+            self.rc_rows = []
+            self.frame_idx = 0
+            self.is_recording_map = True
+            
+            if not self.headless:
+                self.ui.btn_rec_map.config(text="⏹ STOP RECORDING", bg="black")
+                self.ui.log_event("Started Mapping Recording...")
+        else:
+            self.is_recording_map = False
+            import pandas as pd
+            pd.DataFrame(self.imu_rows, columns=['t','yaw','pitch','roll','accel_x','accel_y','accel_z','gyro_x','gyro_y','gyro_z']).to_csv(self.map_record_dir / 'imu.csv', index=False)
+            pd.DataFrame(self.rc_rows, columns=['t','steering_deg','speed_mms']).to_csv(self.map_record_dir / 'rc.csv', index=False)
+            if not self.headless:
+                from config import THEME
+                self.ui.btn_rec_map.config(text="🔴 START RECORD MANUAL DRIVE", bg=THEME["danger"])
+                self.ui.log_event(f"Saved {self.frame_idx//3} frames and telemetry.", "SUCCESS")
+
+    def build_visual_map(self):
+        if not hasattr(self, 'map_record_dir') or not self.map_record_dir.exists():
+            if not self.headless: self.ui.log_event("No GUI run recording found! Record first.", "CRITICAL")
+            return
+            
+        def worker():
+            if not self.headless: self.ui.log_event("Starting map solve and graph extraction... This may take up to 30s.", "WARN")
+            import subprocess, sys
+            res = subprocess.run([sys.executable, "-m", "localization.build_map_pipeline"], capture_output=True, text=True)
+            if not self.headless:
+                if res.returncode != 0:
+                    self.ui.log_event("Map Compilation FAILED:", "CRITICAL")
+                    for line in res.stderr.split('\n'):
+                        if line.strip(): self.ui.log_event(line, "CRITICAL")
+                else:
+                    self.ui.log_event("Map Compilation SUCCESS!", "SUCCESS")
+                    for line in res.stdout.split('\n'):
+                        if line.strip() and "[MAP BUILDER]" in line: self.ui.log_event(line, "INFO")
+                    
+        import threading
+        threading.Thread(target=worker, daemon=True).start()
 
     def clear_route(self):
         self.start_node = None; self.end_node = None; self.pass_nodes = []; self.path = []

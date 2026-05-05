@@ -24,29 +24,17 @@ class DeadReckoningNavigator:
         t = max(0.0, self._lost_time_s)
         delta_yaw_deg = current_yaw - self.yaw_at_loss
 
-        # 1. Deadband for Straight Line Drift (ignore noise)
-        if abs(delta_yaw_deg) < 1.0:
-            delta_yaw_deg = 0.0
-
         if abs(self.last_valid_curvature) > 0.0015 or abs(last_steering) > 5.0:
-            # Curved road
-            # Blended Curve Lock: 80% locked to previous curve shape, 20% adaptable to IMU drift
-            imu_predicted_target = 320.0 - (delta_yaw_deg * 20.0)
-            predicted_target = (0.8 * self.last_valid_target) + (0.2 * imu_predicted_target)
+            # Curved road - use the last known target and steering to navigate the bend
+            # We hold the steering through the curve using the previous optimal track positioning
+            predicted_target = self.last_valid_target
             confidence = max(0.0, 1.0 - t / 3.0) # Decay over 3s on curve
         else:
-            # Straight road
+            # Straight road - force target to centre to go straight
+            # If IMU indicates drift, counteract it heavily by pushing the target in the OPPOSITE direction!
+            # Example: If delta_yaw is +5 (Right), target becomes 320 - (5*20) = 220 (Left), forcing Stanley to steer Left!
             predicted_target = 320.0 - (delta_yaw_deg * 20.0) 
             confidence = max(0.0, 1.0 - t / 5.0) # Decay over 5s on straight
-
-        # 2. Motion Consistency Decay
-        # If yaw rate is changing dramatically, the car might be swerving or hitting an unexpected bump
-        # (Assuming dt is approx 0.033, a large jump in delta_yaw means a high instant yaw rate)
-        current_yaw_rate = abs(delta_yaw_deg) / max(t, 0.001)
-        # Note: We don't have last_yaw_rate passed in here, but we can check the total delta_yaw vs time.
-        # If the car is spinning wildly (>20 deg/sec drift), slash confidence
-        if current_yaw_rate > 20.0:
-            confidence *= 0.7
 
         predicted_target = float(np.clip(predicted_target, 150, 490))
         return predicted_target, confidence
@@ -65,7 +53,7 @@ class HybridLaneTracker:
     WIDE_ROAD_PX             = 420
     SINGLE_LANE_PX           = 200
     RIGHT_LANE_BIAS_PX       = 25   # Shift target 25 pixels closer to the right edge
-    DIVIDER_FOLLOW_OFFSET_PX = 100  # Reduced from 145 to avoid overshooting when lane detection is uncertain
+    DIVIDER_FOLLOW_OFFSET_PX = 145  # Must be > DIVIDER_SAFE_PX (130) to avoid force-field oscillations
 
     def __init__(self, img_shape=(480, 640)):
         self.h, self.w = img_shape
@@ -80,7 +68,6 @@ class HybridLaneTracker:
         self.right_stale = 0
         self.estimated_lane_width = 280.0
         self.right_lost_frames = 0
-        self.right_yaw_at_loss = 0.0
         self.dead_reckoner = DeadReckoningNavigator()
 
     def update(self, warped_binary, map_hint: str = "STRAIGHT"):
@@ -172,7 +159,6 @@ class HybridLaneTracker:
 
         if has_right:
             self.right_lost_frames = 0
-            self.right_yaw_at_loss = current_yaw  # record yaw while right lane is visible
             if has_left:
                 if lane_width_px >= self.WIDE_ROAD_PX:
                     base_x = (ev(sl) + ev(sr)) / 2.0 + self.RIGHT_LANE_BIAS_PX
@@ -199,7 +185,7 @@ class HybridLaneTracker:
                 # Because Stanley Controller chases a pixel target:
                 # 320.0 is straight ahead. If we want to steer left, we place the pixel target to the left (< 320).
                 # `delta_yaw_deg` positive means car is too far right, so we pull target left.
-                base_x = 320.0 - (delta_yaw_deg * 10.0)  # Reduced multiplier from 20.0 to 10.0 for gentler correction
+                base_x = 320.0 - (delta_yaw_deg * 20.0)
                 anchor = "IMU_5_DEG_LEFT_FALLBACK"
             else:
                 # After 4 seconds of blind 5-deg left steering, fallback to dead reckoning

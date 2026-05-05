@@ -3,10 +3,6 @@ import numpy as np
 import math
 from dataclasses import dataclass
 from perception.lane_tracker import HybridLaneTracker, DeadReckoningNavigator
-try:
-    from config import ENABLE_SMOOTH_CONFIDENCE
-except ImportError:
-    ENABLE_SMOOTH_CONFIDENCE = False
 
 @dataclass
 class LaneResult:
@@ -22,11 +18,9 @@ class LaneResult:
     curvature:         float
     heading_rad:       float = 0.0
     heading_conf:      float = 0.0
-    y_eval:            float = 400.0
+    y_eval:            float = 320.0
     optical_yaw_rate:  float = 0.0
     optical_vel:       float = 0.0
-    lane_type:         str   = "UNKNOWN"
-    lost:              bool  = False
 
 class VisualOdometry:
     def __init__(self):
@@ -80,13 +74,11 @@ class LaneDetector:
         self.lost_frames = 0
         self.last_target_x = 320.0
         self._heading_ema = 0.0
-        self._confidence_ema = 0.0
-        self._consecutive_good_frames = 0
 
     def process(self, raw_frame, dt: float = 0.033, extra_offset_px=0.0,
                 nav_state="NORMAL", velocity_ms=0.0, last_steering=0.0,
                 upcoming_curve: str = "STRAIGHT", pitch_rad: float = 0.0,
-                current_yaw: float = 0.0, logger=None) -> LaneResult:
+                current_yaw: float = 0.0) -> LaneResult:
         if raw_frame.shape[:2] != (480, 640):
             process_frame = cv2.resize(raw_frame, (640, 480))
         else:
@@ -107,25 +99,17 @@ class LaneDetector:
         lab = cv2.cvtColor(warped_colour, cv2.COLOR_BGR2LAB)
         L = self.clahe.apply(lab[:, :, 0])
         
-        # Color-agnostic edge detection (works for white-on-black OR black-on-white)
-        sobelx = cv2.Sobel(L, cv2.CV_64F, 1, 0, ksize=3)
-        abs_sobelx = np.absolute(sobelx)
-        max_val = np.max(abs_sobelx)
-        if max_val > 0:
-            scaled_sobel = np.uint8(255 * abs_sobelx / max_val)
-        else:
-            scaled_sobel = np.zeros_like(L)
-            
-        _, binary = cv2.threshold(scaled_sobel, 50, 255, cv2.THRESH_BINARY)
+        mean_l = np.mean(L)
+        if mean_l < 100:
+            L = cv2.convertScaleAbs(L, alpha=1.0 + (100 - mean_l)/200, beta=int((100 - mean_l)*0.6))
+        elif mean_l > 180:
+            L = cv2.convertScaleAbs(L, alpha=1.0 - (mean_l - 180)/350, beta=int(-(mean_l - 180)*0.4))
+
+        binary = cv2.adaptiveThreshold(L, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY_INV, 31, 15)
         warped_binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5)))
         
         map_hint = upcoming_curve if upcoming_curve in ("LEFT", "RIGHT") else "STRAIGHT"
-        try:
-            sl, sr, line_dbg, mode_label = self.tracker.update(warped_binary, map_hint=map_hint)
-        except Exception as e:
-            if logger:
-                logger.error(f"LaneTracker update failed: {e}")
-            sl, sr, line_dbg, mode_label = None, None, None, "ERROR"
+        sl, sr, line_dbg, mode_label = self.tracker.update(warped_binary, map_hint=map_hint)
         
         y_eval = 320.0 # Aggressive lookahead
         lw = self.tracker.estimated_lane_width
@@ -134,14 +118,6 @@ class LaneDetector:
             y_eval, lw, extra_offset_px, nav_state, self.lost_frames,
             velocity_ms, last_steering, current_yaw
         )
-        # Lane loss/recovery logging
-        if logger:
-            if sl is None and sr is None:
-                logger.warning("Both lane lines lost! Using dead reckoning.")
-            elif sl is None or sr is None:
-                logger.info("One lane line lost. Using fallback strategy.")
-            else:
-                logger.debug("Both lane lines detected.")
         if not hasattr(self, "_target_ema"):
             self._target_ema = target_x
         # Make EMA aggressive matching request earlier
@@ -159,21 +135,7 @@ class LaneDetector:
             self.last_target_x = target_x
 
         curv = self.tracker.get_curvature(y_eval)
-        raw_conf = 1.0 if (sl is not None and sr is not None) else 0.5 if (sl is not None or sr is not None) else 0.0
-        
-        if ENABLE_SMOOTH_CONFIDENCE:
-            if raw_conf < 0.5:
-                self._consecutive_good_frames = 0
-                alpha_conf = 0.8 # Safety drop: lose confidence instantly
-            else:
-                self._consecutive_good_frames += 1
-                # Hysteresis: Wait 3 valid frames before trusting vision again
-                alpha_conf = 0.1 if self._consecutive_good_frames > 3 else 0.0 
-                
-            self._confidence_ema = (1.0 - alpha_conf) * self._confidence_ema + alpha_conf * raw_conf
-            conf = self._confidence_ema
-        else:
-            conf = raw_conf
+        conf = 1.0 if (sl is not None and sr is not None) else 0.5 if (sl is not None or sr is not None) else 0.0
         
         heading_rad = 0.0
         def _lane_heading(fit, y):
@@ -186,22 +148,6 @@ class LaneDetector:
             heading_rad = _lane_heading(sr, y_eval)
         self._heading_ema = 0.7 * self._heading_ema + 0.3 * heading_rad
         heading_rad = self._heading_ema
-
-        # Determine lane type from tracker state
-        detected_lane_type = "UNKNOWN"
-        if sl is not None and sr is not None:
-            # Both lines present: check the lane composition
-            detected_lane_type = "SOLID"
-        elif sl is not None and sr is None:
-            # Only left line visible: may be dashed center line scenario
-            detected_lane_type = "DASHED"
-        elif sr is not None and sl is None:
-            # Only right line visible: single edge
-            detected_lane_type = "SINGLE_EDGE"
-        else:
-            detected_lane_type = "MISSING"
-            lost_flag = True
-        lost_flag = (sl is None and sr is None)
 
         return LaneResult(
             warped_binary=warped_binary,
@@ -218,7 +164,4 @@ class LaneDetector:
             y_eval=y_eval,
             optical_yaw_rate=opt_yaw_rate,
             optical_vel=opt_vel,
-            lane_type=detected_lane_type,
-            lost=lost_flag,
         )
-

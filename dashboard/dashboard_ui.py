@@ -132,6 +132,16 @@ class DashboardUI:
         self.drive_pad.bind("<Button-1>", lambda e: self.drive_pad.focus_set())
         self.drive_pad.config(takefocus=True)
 
+        # Localization Map Building Controls
+        loc_frm = tk.LabelFrame(mid_col_panes, text="Localization & Mapping Pipeline", bg=THEME["panel"], fg="white", font=THEME["font_h"])
+        mid_col_panes.add(loc_frm, weight=1)
+        
+        self.btn_rec_map = tk.Button(loc_frm, text="🔴 START RECORD MANUAL DRIVE", bg=THEME["danger"], fg="white", font=("Helvetica", 9, "bold"), command=self.controller.toggle_map_recording)
+        self.btn_rec_map.pack(side=tk.TOP, fill=tk.X, padx=5, pady=3)
+        
+        self.btn_build_map = tk.Button(loc_frm, text="⚙️ SOLVE MAP & SAVE PRIOR", bg="#8e44ad", fg="white", font=("Helvetica", 9, "bold"), command=self.controller.build_visual_map)
+        self.btn_build_map.pack(side=tk.TOP, fill=tk.X, padx=5, pady=3)
+
         # Logs
         log_frm = tk.LabelFrame(mid_col_panes, text="System Log (Resizable)", bg=THEME["panel"], fg="white", font=THEME["font_h"])
         mid_col_panes.add(log_frm, weight=1)

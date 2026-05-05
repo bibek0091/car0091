@@ -93,13 +93,6 @@ class Controller:
                 upcoming_curve: str   = "STRAIGHT",
                 curve_dist_m:   float = 99.0) -> ControlOutput:
 
-        # --- SAFE MODE ---
-        if getattr(perc_res, 'confidence', 1.0) < 0.5:
-            base_speed *= 0.5
-            self.MAX_STEER_RATE = 15.0 # Dampen steering to prevent swerves
-        else:
-            self.MAX_STEER_RATE = 60.0
-            
         raw_steer, react_steer_deg, ff_steer_deg = self.stanley.compute(
             perc_res.target_x, perc_res.heading_rad,
             velocity_ms, perc_res.lane_width_px,
