@@ -21,6 +21,8 @@ class LaneResult:
     y_eval:            float = 320.0
     optical_yaw_rate:  float = 0.0
     optical_vel:       float = 0.0
+    lane_type:         str   = "UNKNOWN"
+    lost:              bool  = False
 
 class VisualOdometry:
     def __init__(self):

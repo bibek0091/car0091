@@ -258,8 +258,20 @@ class HybridLaneTracker:
         m = (self.POLY_MARGIN_CURV if curvature > 0.0015 else self.POLY_MARGIN_BASE)
 
         def band(fit): return ((nzx > np.polyval(fit, nzy) - m) & (nzx < np.polyval(fit, nzy) + m)).nonzero()[0]
-        li = band(self.sl) if self.sl is not None else np.array([], dtype=int)
-        ri = band(self.sr) if self.sr is not None else np.array([], dtype=int)
+        
+        sl_search = self.sl
+        sr_search = self.sr
+        
+        # Ghost search for missing lines to enable automatic recovery without breaking tracking mode
+        if self.sl is not None and self.sr is None:
+            sr_search = self.sl.copy()
+            sr_search[2] += self.estimated_lane_width
+        elif self.sr is not None and self.sl is None:
+            sl_search = self.sr.copy()
+            sl_search[2] -= self.estimated_lane_width
+
+        li = band(sl_search) if sl_search is not None else np.array([], dtype=int)
+        ri = band(sr_search) if sr_search is not None else np.array([], dtype=int)
 
         if len(li) < self.MIN_PIX_OK and len(ri) < self.MIN_PIX_OK:
             self.mode = "SEARCH"
