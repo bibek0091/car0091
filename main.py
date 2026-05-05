@@ -1,9 +1,10 @@
+import cv2
 import tkinter as tk
 from tkinter import messagebox
 import time
 import math
 import numpy as np
-import cv2
+
 import csv
 import json
 import os
@@ -539,7 +540,6 @@ class BFMC_App:
                 t = time.time() - self.record_start_time
                 if not hasattr(self, 'frame_idx'): self.frame_idx = 0
                 if self.frame_idx % 3 == 0:
-                    import cv2
                     cv2.imwrite(str(self.map_record_dir / 'frames' / f'frame_{self.frame_idx//3:06d}.jpg'), frame)
                 
                 self.imu_rows.append([t, self.imu.get_yaw(), getattr(self.imu, 'pitch', 0.0), 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])

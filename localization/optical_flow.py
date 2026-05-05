@@ -21,6 +21,12 @@ def estimate_velocity(prev_roi, curr_roi, dt: float) -> float:
     if dt <= 0:
         return 0.0
 
+    if len(prev_roi.shape) == 3: prev_roi = cv2.cvtColor(prev_roi, cv2.COLOR_BGR2GRAY)
+    if len(curr_roi.shape) == 3: curr_roi = cv2.cvtColor(curr_roi, cv2.COLOR_BGR2GRAY)
+
+    if len(prev_roi.shape) == 3: prev_roi = cv2.cvtColor(prev_roi, cv2.COLOR_BGR2GRAY)
+    if len(curr_roi.shape) == 3: curr_roi = cv2.cvtColor(curr_roi, cv2.COLOR_BGR2GRAY)
+
     prev_pts = cv2.goodFeaturesToTrack(
         prev_roi, maxCorners=80, qualityLevel=0.01, minDistance=5
     )
