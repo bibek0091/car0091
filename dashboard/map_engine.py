@@ -251,3 +251,53 @@ class MapEngine:
         draw.line([cx, cy, hx, hy], fill="white", width=2)
             
         return pil
+
+import queue
+import cv2
+try:
+    from localization.config import MAP_W_M, MAP_H_M, SVG_W_PX, SVG_H_PX, CONVERGENCE_SPREAD_M
+except ImportError:
+    MAP_W_M, MAP_H_M = 20.5, 14.0
+    SVG_W_PX, SVG_H_PX = 800, 540
+    CONVERGENCE_SPREAD_M = 0.3
+
+def m_to_px(x_m, y_m):
+    """Map-frame metres → SVG pixel coordinates."""
+    px = (x_m / MAP_W_M) * SVG_W_PX
+    py = (1.0 - y_m / MAP_H_M) * SVG_H_PX
+    return int(px), int(py)
+
+def render_car_marker(surface, pose: dict):
+    """Draw a heading-aware triangle on the map surface."""
+    px, py   = m_to_px(pose['x'], pose['y'])
+    heading  = pose['heading']           # radians
+    conf     = pose.get('confidence', 0)
+    spread   = pose.get('spread_m', 0)
+
+    # Colour: green when converged, amber when uncertain
+    colour = (0, 200, 100) if conf > 0.7 else (255, 180, 0)
+
+    # Triangle pointing in heading direction (7px half-width)
+    size = 10
+    tip  = (int(px + size*math.cos(heading)),
+            int(py - size*math.sin(heading)))   # SVG y flips
+    lft  = (int(px + size*0.5*math.cos(heading + 2.4)),
+            int(py - size*0.5*math.sin(heading + 2.4)))
+    rgt  = (int(px + size*0.5*math.cos(heading - 2.4)),
+            int(py - size*0.5*math.sin(heading - 2.4)))
+
+    pts  = np.array([tip, lft, rgt], np.int32)
+    cv2.fillPoly(surface, [pts], colour)
+
+    # Uncertainty ring during global localization phase
+    if spread > CONVERGENCE_SPREAD_M * 0.5:
+        r_px = int(spread * (SVG_W_PX / MAP_W_M))
+        cv2.circle(surface, (px, py), r_px, (255, 180, 0), 1)
+
+def update_map(surface, pose_queue: queue.Queue):
+    """Call every dashboard frame. Non-blocking."""
+    try:
+        pose = pose_queue.get_nowait()
+        render_car_marker(surface, pose)
+    except queue.Empty:
+        pass   # redraw last frame unchanged

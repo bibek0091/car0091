@@ -16,6 +16,9 @@ from config import *
 from dashboard.dashboard_ui import DashboardUI
 from dashboard.map_engine import MapEngine
 from dashboard.adas_vision_utils import annotate_bev, JunctionDetector, RoundaboutNavigator
+import queue
+import threading
+from localization.global_localizer import RealtimeLocalizer
 
 try:
     from hardware.serial_handler import STM32_SerialHandler
@@ -249,6 +252,12 @@ class BFMC_App:
         self.crosswalk_timer = 0.0
         self.priority_timer = 0.0
         self.bus_lane_active = False
+
+        # Localization App Setup
+        self.pose_queue = queue.Queue(maxsize=1)
+        self.localizer_engine = RealtimeLocalizer(self.pose_queue, self.imu, self.camera, self.handler)
+        self.loc_thread = threading.Thread(target=self.localizer_engine.run, daemon=True)
+        self.loc_thread.start()
 
         # Routing State
         self.mode = "DRIVE"
@@ -500,6 +509,17 @@ class BFMC_App:
         loop_start = now  # snapshot BEFORE processing (fixes loop_time_ms bug)
         self.last_ctrl_time = now
 
+        # Update pose from particle filter localizer
+        try:
+            pose = self.pose_queue.get_nowait()
+            self.car_x = pose['x']
+            self.car_y = pose['y']
+            self.car_yaw = pose['heading']
+            self.loc_confidence = pose.get('confidence', 0)
+            self.loc_spread = pose.get('spread_m', 0)
+        except queue.Empty:
+            pass
+
         base_speed = float(self.ui.slider_base_speed.get() if not self.headless else 50.0)
         steer_mult = float(self.ui.slider_steer_mult.get() if not self.headless else 1.0)
 
@@ -520,6 +540,11 @@ class BFMC_App:
                 frame, dt=dt, velocity_ms=max(self.current_speed / 1000.0, 0.0),
                 last_steering=self.current_steer, current_yaw=yaw_deg
             )
+
+            # Pass lateral error to Localizer (convert pixels to roughly metres)
+            if hasattr(self, 'localizer_engine') and lane_result is not None:
+                err_m = lane_result.lateral_error_px * 0.002
+                self.localizer_engine.update_lane_error(err_m)
 
             # --- Pass Optical Flow to IMU Fusion ---
             self.imu.update_optical_velocity(lane_result.optical_vel)
@@ -1007,6 +1032,8 @@ class BFMC_App:
         if e.keysym in self.keys: self.keys[e.keysym] = False
 
     def on_close(self):
+        if hasattr(self, 'localizer_engine') and self.localizer_engine:
+            self.localizer_engine.shutdown()
         self.camera.stop()
         if self.yolo: self.yolo.stop()
         if self.is_connected:
